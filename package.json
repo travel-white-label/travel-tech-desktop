@@ -1,0 +1,78 @@
+{
+  "name": "white-label-admin-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop build of the white-label platform: the admin and supplier-hub in one installable app.",
+  "author": "White-Label",
+  "main": "main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "doctor": "node build.mjs --doctor",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.whitelabel.admin",
+    "productName": "White-Label Admin",
+    "artifactName": "white-label-admin-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "stage/template.db",
+        "to": "template.db"
+      },
+      {
+        "from": "stage/hub",
+        "to": "hub"
+      },
+      {
+        "from": "stage/env",
+        "to": "env"
+      }
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "afterPack": "./after-pack.js",
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "white-label-admin-${os}-${arch}-portable.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.business",
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "maintainer": "White-Label <desktop@white-label.invalid>"
+    }
+  }
+}

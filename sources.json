@@ -1,0 +1,15 @@
+{
+  "$comment": "The repositories a desktop release is built from. `ref` is a branch, tag or commit — one for every channel, or { \"production\": …, \"test\": … }. Each name needs a builder in build.mjs and a service in main.js.",
+  "sources": [
+    {
+      "name": "white-label-admin",
+      "repo": "sirazul-ibos/white-label-admin",
+      "ref": { "production": "main", "test": "main" }
+    },
+    {
+      "name": "supplier-hub",
+      "repo": "travel-white-label/supplier-hub",
+      "ref": { "production": "atik-prod", "test": "atik-prod" }
+    }
+  ]
+}

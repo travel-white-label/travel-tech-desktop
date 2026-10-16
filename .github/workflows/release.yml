@@ -1,0 +1,122 @@
+# Builds every target and publishes a GitHub release.
+#
+#   git tag v1.2.0         && git push origin v1.2.0          → production release
+#   git tag v1.2.0-test.1  && git push origin v1.2.0-test.1   → test pre-release
+#   Actions → Release → Run workflow                          → artifacts only, no release
+#
+# Repository secret:   SOURCES_TOKEN — read access to every repo in sources.json
+# Environment secrets: ENV_WHITE_LABEL_ADMIN, ENV_SUPPLIER_HUB — dotenv text, one
+#                      set in the "production" environment and one in "test"
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [test, production]
+        default: test
+
+permissions:
+  contents: read
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.meta.outputs.channel }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            case "$version" in *-test*) channel=test ;; *-*) echo "::error::tags are vX.Y.Z or vX.Y.Z-test.N"; exit 1 ;; *) channel=production ;; esac
+          else
+            channel="${{ inputs.channel }}"
+            version="$(node -p 'require("./package.json").version')-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building $version on the $channel channel"
+
+  build:
+    needs: meta
+    environment: ${{ needs.meta.outputs.channel }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: win-x64, os: windows-latest }
+          - { target: mac-arm64, os: macos-latest }
+          - { target: mac-x64, os: macos-15-intel }
+          - { target: linux-x64, os: ubuntu-22.04 }
+          - { target: linux-arm64, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: false
+      # electron-builder's bundled fpm (for .deb) is x64-only.
+      - if: matrix.target == 'linux-arm64'
+        run: sudo apt-get update && sudo apt-get install -y ruby ruby-dev && sudo gem install fpm --no-document
+      - run: npm ci
+      - run: node build.mjs --channel ${{ needs.meta.outputs.channel }}
+        env:
+          DESKTOP_VERSION: ${{ needs.meta.outputs.version }}
+          GH_TOKEN: ${{ secrets.SOURCES_TOKEN }}
+          ENV_WHITE_LABEL_ADMIN: ${{ secrets.ENV_WHITE_LABEL_ADMIN }}
+          ENV_SUPPLIER_HUB: ${{ secrets.ENV_SUPPLIER_HUB }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          USE_SYSTEM_FPM: ${{ matrix.target == 'linux-arm64' && 'true' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            dist/white-label-admin-*.exe
+            dist/white-label-admin-*.dmg
+            dist/white-label-admin-*.zip
+            dist/white-label-admin-*.AppImage
+            dist/white-label-admin-*.deb
+            dist/build-*.json
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd assets
+          sha256sum white-label-admin-* > checksums.txt
+          {
+            echo "Channel: **${{ needs.meta.outputs.channel }}**"
+            echo
+            echo "| Source | Ref | Commit |"
+            echo "| --- | --- | --- |"
+            jq -r '.sources[] | "| \(.repo) | \(.ref) | `\(.commit[0:12])` |"' build-linux-x64.json
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md \
+            ${{ needs.meta.outputs.channel == 'test' && '--prerelease' || '' }} \
+            white-label-admin-* checksums.txt build-*.json
