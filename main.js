@@ -207,7 +207,7 @@ async function waitForHealth(url, child, timeoutMs = 120_000) {
   throw new Error("It did not become ready in time.");
 }
 
-function startAdmin({ config, adminPort, hubPort }) {
+function startAdmin({ config, adminPort, hubPort, redisPort }) {
   const env = {
     ...bakedEnv(ADMIN),
     ...config[ADMIN],
@@ -221,6 +221,9 @@ function startAdmin({ config, adminPort, hubPort }) {
     AUTH_TRUST_HOST: "true",
     NEXT_TELEMETRY_DISABLED: "1",
     SUPPLIER_HUB_URL: `http://${BIND}:${hubPort}/supplierhub`,
+    // supplier-hub's Redis (hub-runner): the admin writes the hub's settings
+    // there (suppliers, commissions, markups…), as core-api does on a server.
+    SUPPLIER_HUB_REDIS_URL: `redis://${BIND}:${redisPort}`,
     // server-entry.js exits when this pid disappears, so a crash of the
     // launcher never leaves an orphaned server holding the database.
     DESKTOP_PARENT_PID: String(process.pid),
@@ -235,31 +238,29 @@ function startAdmin({ config, adminPort, hubPort }) {
   });
 }
 
-function startHub({ config, adminPort, hubPort }) {
+function startHub({ config, adminPort, hubPort, redisPort }) {
   // Goravel reads resources/views and writes storage/ relative to its cwd,
   // which must be writable: a fresh copy of the templates on every launch.
   fs.rmSync(path.join(hubWorkDir, "resources"), { recursive: true, force: true });
   fs.cpSync(path.join(hubDir, "resources"), path.join(hubWorkDir, "resources"), { recursive: true });
-  return freePort().then((redisPort) =>
-    startChild(HUB, path.join(hubDir, `hub-runner${exe}`), [], {
-      cwd: hubWorkDir,
-      log: hubLogPath,
-      env: {
-        CORE_API_URL: `http://${BIND}:${adminPort}`,
-        ...bakedEnv(HUB),
-        ...config[HUB],
-        HUB_BIN: path.join(hubDir, `supplierhub${exe}`),
-        DESKTOP_PARENT_PID: String(process.pid),
-        APP_HOST: BIND,
-        APP_PORT: String(hubPort),
-        APP_URL: `http://${BIND}:${hubPort}`,
-        REDIS_HOST: BIND,
-        REDIS_PORT: String(redisPort),
-        REDIS_PASSWORD: "",
-        QUEUE_CONNECTION: "redis",
-      },
-    }),
-  );
+  return startChild(HUB, path.join(hubDir, `hub-runner${exe}`), [], {
+    cwd: hubWorkDir,
+    log: hubLogPath,
+    env: {
+      CORE_API_URL: `http://${BIND}:${adminPort}`,
+      ...bakedEnv(HUB),
+      ...config[HUB],
+      HUB_BIN: path.join(hubDir, `supplierhub${exe}`),
+      DESKTOP_PARENT_PID: String(process.pid),
+      APP_HOST: BIND,
+      APP_PORT: String(hubPort),
+      APP_URL: `http://${BIND}:${hubPort}`,
+      REDIS_HOST: BIND,
+      REDIS_PORT: String(redisPort),
+      REDIS_PASSWORD: "",
+      QUEUE_CONNECTION: "redis",
+    },
+  });
 }
 
 function fail(error) {
@@ -337,11 +338,17 @@ if (!app.requestSingleInstanceLock()) {
 
       const config = loadConfig();
       const firstRun = ensureDatabase();
-      const ports = { config, adminPort: await freePort(), hubPort: await freePort() };
+      // The Redis port is picked here, not by hub-runner: the admin needs it too.
+      const ports = {
+        config,
+        adminPort: await freePort(),
+        hubPort: await freePort(),
+        redisPort: await freePort(),
+      };
 
       // supplier-hub is not fatal: the admin still runs without it, and its
       // supplier calls report the hub as unreachable. hub.log says why.
-      const hub = await startHub(ports);
+      const hub = startHub(ports);
       hub.on("exit", (code) => {
         if (!quitting) logMain(`supplier-hub stopped (exit code ${code}), see ${hubLogPath}`);
       });
