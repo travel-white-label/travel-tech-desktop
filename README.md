@@ -76,6 +76,31 @@ Repository secret `SOURCES_TOKEN`: a fine-grained token (or GitHub App token)
 with read access to every repo in `sources.json`. It is passed to git as a
 header through the environment and never reaches the builds' install scripts.
 
+## Local development (no build)
+
+```bash
+npm ci                                  # once, in this folder
+(cd ../white-label-admin && pnpm install)   # once
+# once: its database (prisma/dev.db with DATABASE_URL=file:../dev.db) — schema + seed
+(cd ../white-label-admin && pnpm generate && pnpm exec prisma db push --skip-generate \
+  && pnpm seed && pnpm seed-customer-roles && pnpm import-reference-data)
+npm run dev
+```
+
+Runs the sibling checkouts `../white-label-admin` and `../supplier-hub` as
+they are (`WL_ADMIN_SRC` / `WL_HUB_SRC` point elsewhere) — nothing is staged
+or packaged:
+
+- **admin** — `next dev` with hot reload, using the checkout's own `.env` and
+  database. The launcher only sets the port, `AUTH_URL` and the supplier-hub
+  wiring.
+- **supplier-hub** — `go build` into `work/dev-hub/` on each launch (Go
+  caches, so it's quick), run from the checkout. Restart the app to pick up Go
+  changes.
+
+Both also get the non-empty values of `env/test/<repo>.env`. Logs and
+`config.json` go to `work/dev-data/`.
+
 ## Building locally
 
 Needs git, Node 22+, Go 1.24+ and `npm ci` in this folder; `npm run doctor`

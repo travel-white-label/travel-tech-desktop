@@ -40,6 +40,7 @@ const fs = require("fs");
 const net = require("net");
 const path = require("path");
 const { URL } = require("url");
+const { parseEnv } = require("util");
 
 // The server binds to the IPv4 loopback, but every browser-facing URL says
 // `localhost`: Next rewrites any loopback hostname in request.nextUrl to
@@ -53,20 +54,38 @@ const ADMIN = "white-label-admin";
 const HUB = "supplier-hub";
 const exe = process.platform === "win32" ? ".exe" : "";
 
+// `npm run dev` (electron . --dev): nothing is built or staged. The sibling
+// checkouts run as they are: the admin under `next dev` (hot reload, its own
+// .env and database), supplier-hub compiled by `go build` on each launch.
+// WL_ADMIN_SRC / WL_HUB_SRC point at checkouts elsewhere.
+const DEV = !app.isPackaged && process.argv.includes("--dev");
+const devSrc = {
+  [ADMIN]: path.resolve(process.env.WL_ADMIN_SRC ?? path.join(__dirname, "..", "white-label-admin")),
+  [HUB]: path.resolve(process.env.WL_HUB_SRC ?? path.join(__dirname, "..", "supplier-hub")),
+};
+
 const resources = app.isPackaged ? process.resourcesPath : path.join(__dirname, "stage");
 const standaloneDir = path.join(resources, "standalone");
 const hubDir = path.join(resources, "hub");
 const templateDb = path.join(resources, "template.db");
 // What build.mjs built: version, channel (test | production), target, sources.
 const build = readJson(path.join(resources, "env", "build.json"));
-const APP_NAME = build.channel === "test" ? "White-Label Admin Test" : "White-Label Admin";
+const APP_NAME = DEV
+  ? "White-Label Admin Dev"
+  : build.channel === "test"
+    ? "White-Label Admin Test"
+    : "White-Label Admin";
 
 // WL_ADMIN_DATA_DIR relocates everything (database, secrets, logs, browser
 // profile and the single-instance lock) — for tests, and for a client who
 // wants the data on another drive.
+// Dev keeps its own folder: unpackaged, the app would share an installed
+// production copy's folder and single-instance lock.
 const userData = process.env.WL_ADMIN_DATA_DIR
   ? path.resolve(process.env.WL_ADMIN_DATA_DIR)
-  : app.getPath("userData");
+  : DEV
+    ? path.join(__dirname, "work", "dev-data")
+    : app.getPath("userData");
 app.setPath("userData", userData);
 const dbPath = path.join(userData, "admin.db");
 const configPath = path.join(userData, "config.json");
@@ -110,8 +129,15 @@ function readJson(file) {
   }
 }
 
-/** The env baked into this build for one service (build.mjs → resources/env). */
-const bakedEnv = (name) => readJson(path.join(resources, "env", `${name}.json`));
+/**
+ * The env baked into this build for one service (build.mjs → resources/env).
+ * In dev, the test channel's env file, read as build.mjs would: empty means unset.
+ */
+function bakedEnv(name) {
+  if (!DEV) return readJson(path.join(resources, "env", `${name}.json`));
+  const file = fs.readFileSync(path.join(__dirname, "env", "test", `${name}.env`), "utf8");
+  return Object.fromEntries(Object.entries(parseEnv(file)).filter(([, value]) => value !== ""));
+}
 
 /**
  * config.json holds one object per service. Secrets are minted once per
@@ -150,7 +176,7 @@ function loadConfig() {
 
 /** @returns {boolean} true when the database was just created from the template */
 function ensureDatabase() {
-  if (fs.existsSync(dbPath)) return false;
+  if (DEV || fs.existsSync(dbPath)) return false;
   fs.copyFileSync(templateDb, dbPath);
   return true;
 }
@@ -208,15 +234,8 @@ async function waitForHealth(url, child, timeoutMs = 120_000) {
 }
 
 function startAdmin({ config, adminPort, hubPort, redisPort }) {
-  const env = {
-    ...bakedEnv(ADMIN),
-    ...config[ADMIN],
-    ELECTRON_RUN_AS_NODE: "1",
-    NODE_ENV: "production",
+  const wiring = {
     PORT: String(adminPort),
-    HOSTNAME: BIND,
-    DB_PROVIDER: "sqlite",
-    DATABASE_URL: `file:${dbPath.replace(/\\/g, "/")}`,
     AUTH_URL: `http://${HOST}:${adminPort}`,
     AUTH_TRUST_HOST: "true",
     NEXT_TELEMETRY_DISABLED: "1",
@@ -224,6 +243,27 @@ function startAdmin({ config, adminPort, hubPort, redisPort }) {
     // supplier-hub's Redis (hub-runner): the admin writes the hub's settings
     // there (suppliers, commissions, markups…), as core-api does on a server.
     SUPPLIER_HUB_REDIS_URL: `redis://${BIND}:${redisPort}`,
+  };
+  if (DEV) {
+    // The checkout's .env supplies the rest — its database and AUTH_SECRET
+    // (settings in that database are sealed under it, so config.json stays out).
+    // ponytail: if the launcher is killed, next dev outlives it; quit normally.
+    const next = path.join(devSrc[ADMIN], "node_modules", "next", "dist", "bin", "next");
+    return startChild(ADMIN, "node", [next, "dev", "--port", String(adminPort), "--hostname", BIND], {
+      cwd: devSrc[ADMIN],
+      env: { ...bakedEnv(ADMIN), ...wiring },
+      log: logPath,
+    });
+  }
+  const env = {
+    ...bakedEnv(ADMIN),
+    ...config[ADMIN],
+    ...wiring,
+    ELECTRON_RUN_AS_NODE: "1",
+    NODE_ENV: "production",
+    HOSTNAME: BIND,
+    DB_PROVIDER: "sqlite",
+    DATABASE_URL: `file:${dbPath.replace(/\\/g, "/")}`,
     // server-entry.js exits when this pid disappears, so a crash of the
     // launcher never leaves an orphaned server holding the database.
     DESKTOP_PARENT_PID: String(process.pid),
@@ -238,19 +278,36 @@ function startAdmin({ config, adminPort, hubPort, redisPort }) {
   });
 }
 
+/** Dev only: compiles the Go package in `dir` to `out` (incremental, Go caches). */
+function goBuild(dir, out) {
+  logMain(`go build ${dir}`);
+  const result = spawnSync("go", ["build", "-o", out, "."], { cwd: dir, encoding: "utf8", windowsHide: true });
+  if (result.status !== 0) throw new Error(`go build failed in ${dir}\n\n${result.stderr ?? result.error}`);
+}
+
 function startHub({ config, adminPort, hubPort, redisPort }) {
-  // Goravel reads resources/views and writes storage/ relative to its cwd,
-  // which must be writable: a fresh copy of the templates on every launch.
-  fs.rmSync(path.join(hubWorkDir, "resources"), { recursive: true, force: true });
-  fs.cpSync(path.join(hubDir, "resources"), path.join(hubWorkDir, "resources"), { recursive: true });
-  return startChild(HUB, path.join(hubDir, `hub-runner${exe}`), [], {
-    cwd: hubWorkDir,
+  let bin = hubDir;
+  let cwd = hubWorkDir;
+  if (DEV) {
+    // Run in the checkout itself: its resources/ and storage/ are right there.
+    bin = path.join(__dirname, "work", "dev-hub");
+    cwd = devSrc[HUB];
+    goBuild(devSrc[HUB], path.join(bin, `supplierhub${exe}`));
+    goBuild(path.join(__dirname, "hub-runner"), path.join(bin, `hub-runner${exe}`));
+  } else {
+    // Goravel reads resources/views and writes storage/ relative to its cwd,
+    // which must be writable: a fresh copy of the templates on every launch.
+    fs.rmSync(path.join(hubWorkDir, "resources"), { recursive: true, force: true });
+    fs.cpSync(path.join(hubDir, "resources"), path.join(hubWorkDir, "resources"), { recursive: true });
+  }
+  return startChild(HUB, path.join(bin, `hub-runner${exe}`), [], {
+    cwd,
     log: hubLogPath,
     env: {
       CORE_API_URL: `http://${BIND}:${adminPort}`,
       ...bakedEnv(HUB),
       ...config[HUB],
-      HUB_BIN: path.join(hubDir, `supplierhub${exe}`),
+      HUB_BIN: path.join(bin, `supplierhub${exe}`),
       DESKTOP_PARENT_PID: String(process.pid),
       APP_HOST: BIND,
       APP_PORT: String(hubPort),
