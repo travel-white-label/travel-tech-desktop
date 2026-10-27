@@ -59,6 +59,15 @@ const exe = process.platform === "win32" ? ".exe" : "";
 // .env and database), supplier-hub compiled by `go build` on each launch.
 // WL_ADMIN_SRC / WL_HUB_SRC point at checkouts elsewhere.
 const DEV = !app.isPackaged && process.argv.includes("--dev");
+// Where the checkouts are can differ per machine: a gitignored desktop/.env
+// may set WL_ADMIN_SRC / WL_HUB_SRC (the shell's own values still win).
+if (DEV) {
+  try {
+    process.loadEnvFile(path.join(__dirname, ".env"));
+  } catch {
+    // optional
+  }
+}
 const devSrc = {
   [ADMIN]: path.resolve(process.env.WL_ADMIN_SRC ?? path.join(__dirname, "..", "white-label-admin")),
   [HUB]: path.resolve(process.env.WL_HUB_SRC ?? path.join(__dirname, "..", "supplier-hub")),
@@ -287,21 +296,20 @@ function goBuild(dir, out) {
 
 function startHub({ config, adminPort, hubPort, redisPort }) {
   let bin = hubDir;
-  let cwd = hubWorkDir;
+  let src = hubDir;
   if (DEV) {
-    // Run in the checkout itself: its resources/ and storage/ are right there.
     bin = path.join(__dirname, "work", "dev-hub");
-    cwd = devSrc[HUB];
-    goBuild(devSrc[HUB], path.join(bin, `supplierhub${exe}`));
+    src = devSrc[HUB];
+    goBuild(src, path.join(bin, `supplierhub${exe}`));
     goBuild(path.join(__dirname, "hub-runner"), path.join(bin, `hub-runner${exe}`));
-  } else {
-    // Goravel reads resources/views and writes storage/ relative to its cwd,
-    // which must be writable: a fresh copy of the templates on every launch.
-    fs.rmSync(path.join(hubWorkDir, "resources"), { recursive: true, force: true });
-    fs.cpSync(path.join(hubDir, "resources"), path.join(hubWorkDir, "resources"), { recursive: true });
   }
+  // Goravel reads resources/views and writes storage/ relative to its cwd,
+  // which must be writable: a fresh copy of the templates on every launch.
+  // Never the checkout itself: its .env would win over every value set here.
+  fs.rmSync(path.join(hubWorkDir, "resources"), { recursive: true, force: true });
+  fs.cpSync(path.join(src, "resources"), path.join(hubWorkDir, "resources"), { recursive: true });
   return startChild(HUB, path.join(bin, `hub-runner${exe}`), [], {
-    cwd,
+    cwd: hubWorkDir,
     log: hubLogPath,
     env: {
       CORE_API_URL: `http://${BIND}:${adminPort}`,
@@ -344,6 +352,13 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     try {
       fs.mkdirSync(hubWorkDir, { recursive: true });
+      if (DEV) {
+        for (const [name, dir] of Object.entries(devSrc)) {
+          if (!fs.existsSync(dir)) {
+            throw new Error(`No ${name} checkout at ${dir}. Set its path in desktop/.env (see README).`);
+          }
+        }
+      }
       logMain(
         `launch (packaged=${app.isPackaged}, data=${userData}, ` +
           `build=${build.version ?? "?"} ${build.channel ?? "?"} ${build.target ?? "?"})`,

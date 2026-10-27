@@ -88,7 +88,7 @@ npm run dev
 ```
 
 Runs the sibling checkouts `../white-label-admin` and `../supplier-hub` as
-they are (`WL_ADMIN_SRC` / `WL_HUB_SRC` point elsewhere) — nothing is staged
+they are (set `WL_ADMIN_SRC` / `WL_HUB_SRC` in a gitignored `desktop/.env` to point elsewhere) — nothing is staged
 or packaged:
 
 - **admin** — `next dev` with hot reload, using the checkout's own `.env` and

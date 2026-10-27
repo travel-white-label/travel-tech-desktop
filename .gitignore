@@ -2,3 +2,4 @@ node_modules/
 stage/
 dist/
 work/
+.env
