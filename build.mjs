@@ -132,11 +132,18 @@ function fetchSource(source) {
   return { dir, ref, commit: run("git", ["rev-parse", "HEAD"], { cwd: dir, capture: true, quiet: true }) };
 }
 
-/** env/<channel>/<name>.env, then the ENV_<NAME> secret over it; empty means unset. */
+/**
+ * env/<channel>/<name>.env, then the gitignored <name>.secret.env, then the ENV_<NAME>
+ * secret over them; empty means unset.
+ */
 function loadEnv(name) {
-  const file = path.join(desktop, "env", channel, `${name}.env`);
+  const read = (file) => {
+    const p = path.join(desktop, "env", channel, file);
+    return fs.existsSync(p) ? parseEnv(fs.readFileSync(p, "utf8")) : {};
+  };
   const merged = {
-    ...(fs.existsSync(file) ? parseEnv(fs.readFileSync(file, "utf8")) : {}),
+    ...read(`${name}.env`),
+    ...read(`${name}.secret.env`),
     ...parseEnv(process.env[`ENV_${name.toUpperCase().replace(/-/g, "_")}`] ?? ""),
   };
   return Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== ""));

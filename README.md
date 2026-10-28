@@ -59,6 +59,8 @@ A build is **test** or **production**. Each channel has:
 - **secrets** — the GitHub Environment named after the channel, one secret per
   repo, `ENV_<REPO>` (`ENV_WHITE_LABEL_ADMIN`, `ENV_SUPPLIER_HUB`), holding
   dotenv text. Merged over the env file at build time.
+- **local secrets** — `env/<channel>/<repo>.secret.env`: gitignored, for builds
+  on your own machine. Read after the env file, before `ENV_<REPO>`.
 
 A test build is a separate app (*White-Label Admin Test*, its own app id and
 data folder), so it installs next to production and never opens its database.

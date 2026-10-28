@@ -3,3 +3,4 @@ stage/
 dist/
 work/
 .env
+*.secret.env
