@@ -144,8 +144,8 @@ Electron (main.js)
   crash never leaves a server holding the database.
 - supplier-hub failing does not stop the admin; see `hub.log`.
 
-Per-install data folder (`%APPDATA%`, `~/Library/Application Support`,
-`~/.config`, then `white-label-admin-desktop[-test]`):
+Per-install data folder, on every OS a hidden folder in the user's home
+(`~/.white-label-admin`, `~/.white-label-admin-test`; on Windows `C:\Users\<name>\.white-label-admin`):
 
 | File            | Purpose                                                                      |
 | --------------- | ---------------------------------------------------------------------------- |

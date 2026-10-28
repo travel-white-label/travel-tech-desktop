@@ -4,6 +4,7 @@
 //   node build.mjs --channel production
 //   node build.mjs --src supplier-hub=../supplier-hub   use a local checkout as-is
 //   node build.mjs --doctor                 only check the tools
+//   node build.mjs --install                macOS: also replace the app in /Applications
 //
 // Each source is fetched into work/<name> at the ref sources.json names for
 // the channel, built with env/<channel>/<name>.env plus the ENV_<NAME> secret,
@@ -258,6 +259,15 @@ await build({
   publish: "never",
 });
 fs.copyFileSync(path.join(stage, "env", "build.json"), path.join(desktop, "dist", `build-${platform}-${arch}.json`));
+
+if (argv.includes("--install") && platform === "mac") {
+  const dir = path.join(desktop, "dist", arch === "arm64" ? "mac-arm64" : "mac");
+  const appName = fs.readdirSync(dir).find((f) => f.endsWith(".app"));
+  const target = path.join("/Applications", appName);
+  step(`Installing ${target}`);
+  fs.rmSync(target, { recursive: true, force: true });
+  run("ditto", [path.join(dir, appName), target]);
+}
 
 step("Done");
 for (const name of fs.readdirSync(path.join(desktop, "dist"))) {

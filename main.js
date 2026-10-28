@@ -14,7 +14,7 @@
 //   3. config.json[<name>]         (per install: minted secrets + anything a client adds)
 //   4. launcher-owned values       (ports, paths, Redis) — always win
 //
-// Per-install state lives under the userData folder (or WL_ADMIN_DATA_DIR):
+// Per-install state lives under the userData folder (~/.white-label-admin, or WL_ADMIN_DATA_DIR):
 //   admin.db      the SQLite database (copied from the template on first launch)
 //   config.json   per-service env, secrets minted on first launch
 //   server.log    the admin's output and the launcher's own lines
@@ -90,11 +90,12 @@ const APP_NAME = DEV
 // wants the data on another drive.
 // Dev keeps its own folder: unpackaged, the app would share an installed
 // production copy's folder and single-instance lock.
+// On every OS it lives in a hidden home folder (~/.white-label-admin[-test]).
 const userData = process.env.WL_ADMIN_DATA_DIR
   ? path.resolve(process.env.WL_ADMIN_DATA_DIR)
   : DEV
     ? path.join(__dirname, "work", "dev-data")
-    : app.getPath("userData");
+    : path.join(app.getPath("home"), `.${APP_NAME.toLowerCase().replace(/ /g, "-")}`);
 app.setPath("userData", userData);
 const dbPath = path.join(userData, "admin.db");
 const configPath = path.join(userData, "config.json");
