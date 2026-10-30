@@ -30,14 +30,6 @@
     ],
     "extraResources": [
       {
-        "from": "stage/template.db",
-        "to": "template.db"
-      },
-      {
-        "from": "stage/hub",
-        "to": "hub"
-      },
-      {
         "from": "stage/env",
         "to": "env"
       }
@@ -49,8 +41,7 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "signAndEditExecutable": false
+      ]
     },
     "nsis": {
       "oneClick": false,

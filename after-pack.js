@@ -20,4 +20,20 @@ module.exports = async function afterPack({ appOutDir, packager }) {
   const nextPkg = path.join(target, "node_modules", "next", "package.json");
   if (!fs.existsSync(nextPkg)) throw new Error(`afterPack: ${nextPkg} missing after copy`);
   console.log(`  • afterPack       copied standalone server → ${target}`);
+
+  // Read-and-write, not copyFile: on the Windows runners CopyFileW kept failing
+  // with EBUSY on the freshly built supplierhub.exe and template.db.
+  const copy = (from, to) => {
+    if (fs.statSync(from).isDirectory()) {
+      fs.mkdirSync(to, { recursive: true });
+      for (const name of fs.readdirSync(from)) copy(path.join(from, name), path.join(to, name));
+    } else {
+      fs.writeFileSync(to, fs.readFileSync(from), { mode: fs.statSync(from).mode });
+    }
+  };
+  for (const name of ["template.db", "hub"]) {
+    fs.rmSync(path.join(resources, name), { recursive: true, force: true });
+    copy(path.join(__dirname, "stage", name), path.join(resources, name));
+  }
+  console.log(`  • afterPack       copied template.db and hub → ${resources}`);
 };
