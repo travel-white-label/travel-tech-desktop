@@ -59,6 +59,8 @@ A build is **test** or **production**. Each channel has:
 - **secrets** — the GitHub Environment named after the channel, one secret per
   repo, `ENV_<REPO>` (`ENV_WHITE_LABEL_ADMIN`, `ENV_SUPPLIER_HUB`), holding
   dotenv text. Merged over the env file at build time.
+- **local secrets** — `env/<channel>/<repo>.secret.env`: gitignored, for builds
+  on your own machine. Read after the env file, before `ENV_<REPO>`.
 
 A test build is a separate app (*White-Label Admin Test*, its own app id and
 data folder), so it installs next to production and never opens its database.
@@ -75,6 +77,31 @@ the baked env → that install's `config.json` → values the launcher owns
 Repository secret `SOURCES_TOKEN`: a fine-grained token (or GitHub App token)
 with read access to every repo in `sources.json`. It is passed to git as a
 header through the environment and never reaches the builds' install scripts.
+
+## Local development (no build)
+
+```bash
+npm ci                                  # once, in this folder
+(cd ../white-label-admin && pnpm install)   # once
+# once: its database (prisma/dev.db with DATABASE_URL=file:../dev.db) — schema + seed
+(cd ../white-label-admin && pnpm generate && pnpm exec prisma db push --skip-generate \
+  && pnpm seed && pnpm seed-customer-roles && pnpm import-reference-data)
+npm run dev
+```
+
+Runs the sibling checkouts `../white-label-admin` and `../supplier-hub` as
+they are (set `WL_ADMIN_SRC` / `WL_HUB_SRC` in a gitignored `desktop/.env` to point elsewhere) — nothing is staged
+or packaged:
+
+- **admin** — `next dev` with hot reload, using the checkout's own `.env` and
+  database. The launcher only sets the port, `AUTH_URL` and the supplier-hub
+  wiring.
+- **supplier-hub** — `go build` into `work/dev-hub/` on each launch (Go
+  caches, so it's quick), run from the checkout. Restart the app to pick up Go
+  changes.
+
+Both also get the non-empty values of `env/test/<repo>.env`. Logs and
+`config.json` go to `work/dev-data/`.
 
 ## Building locally
 
@@ -117,8 +144,8 @@ Electron (main.js)
   crash never leaves a server holding the database.
 - supplier-hub failing does not stop the admin; see `hub.log`.
 
-Per-install data folder (`%APPDATA%`, `~/Library/Application Support`,
-`~/.config`, then `white-label-admin-desktop[-test]`):
+Per-install data folder, on every OS a hidden folder in the user's home
+(`~/.white-label-admin`, `~/.white-label-admin-test`; on Windows `C:\Users\<name>\.white-label-admin`):
 
 | File            | Purpose                                                                      |
 | --------------- | ---------------------------------------------------------------------------- |

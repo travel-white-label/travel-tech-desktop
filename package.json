@@ -7,8 +7,11 @@
   "main": "main.js",
   "scripts": {
     "build": "node build.mjs",
+    "dev": "electron . --dev",
     "doctor": "node build.mjs --doctor",
-    "start": "electron ."
+    "start": "electron .",
+    "build:test": "node build.mjs --channel test --install",
+    "build:prod": "node build.mjs --channel production --install"
   },
   "devDependencies": {
     "electron": "44.3.0",
@@ -46,7 +49,8 @@
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,

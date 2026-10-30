@@ -4,6 +4,7 @@
 //   node build.mjs --channel production
 //   node build.mjs --src supplier-hub=../supplier-hub   use a local checkout as-is
 //   node build.mjs --doctor                 only check the tools
+//   node build.mjs --install                macOS: also replace the app in /Applications
 //
 // Each source is fetched into work/<name> at the ref sources.json names for
 // the channel, built with env/<channel>/<name>.env plus the ENV_<NAME> secret,
@@ -132,11 +133,18 @@ function fetchSource(source) {
   return { dir, ref, commit: run("git", ["rev-parse", "HEAD"], { cwd: dir, capture: true, quiet: true }) };
 }
 
-/** env/<channel>/<name>.env, then the ENV_<NAME> secret over it; empty means unset. */
+/**
+ * env/<channel>/<name>.env, then the gitignored <name>.secret.env, then the ENV_<NAME>
+ * secret over them; empty means unset.
+ */
 function loadEnv(name) {
-  const file = path.join(desktop, "env", channel, `${name}.env`);
+  const read = (file) => {
+    const p = path.join(desktop, "env", channel, file);
+    return fs.existsSync(p) ? parseEnv(fs.readFileSync(p, "utf8")) : {};
+  };
   const merged = {
-    ...(fs.existsSync(file) ? parseEnv(fs.readFileSync(file, "utf8")) : {}),
+    ...read(`${name}.env`),
+    ...read(`${name}.secret.env`),
     ...parseEnv(process.env[`ENV_${name.toUpperCase().replace(/-/g, "_")}`] ?? ""),
   };
   return Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== ""));
@@ -167,7 +175,11 @@ const builders = {
     sh("run", "-s", "seed");
     sh("run", "-s", "seed-customer-roles");
     sh("run", "-s", "import-reference-data");
-    sh("exec", "next", "build");
+    // Its type check outgrows Node's default heap on the 7 GB macOS runners.
+    run("npx", ["-y", pnpm, "exec", "next", "build"], {
+      cwd: dir,
+      env: { ...buildEnv, NODE_OPTIONS: "--max-old-space-size=6144" },
+    });
 
     step("Staging the admin server");
     const standalone = path.join(stage, "standalone");
@@ -190,12 +202,15 @@ const builders = {
     }
 
     // VACUUM INTO folds the WAL into one compact file — the only safe way to
-    // copy a WAL-mode database.
-    const { createClient } = createRequire(path.join(dir, "package.json"))("@libsql/client");
-    const client = createClient({ url: `file:${scratch.replace(/\\/g, "/")}` });
-    return client
-      .execute(`VACUUM INTO '${templateDb.replace(/\\/g, "/").replace(/'/g, "''")}'`)
-      .then(() => client.close());
+    // copy a WAL-mode database. In a child process: libsql keeps its file handles
+    // until exit, and on Windows an open template.db cannot be copied (EBUSY).
+    run(process.execPath, [
+      "-e",
+      'const c = require("@libsql/client").createClient({ url: process.argv[1] });' +
+        "c.execute(process.argv[2]).then(() => c.close());",
+      `file:${scratch.replace(/\\/g, "/")}`,
+      `VACUUM INTO '${templateDb.replace(/\\/g, "/").replace(/'/g, "''")}'`,
+    ], { cwd: dir });
   },
 
   "supplier-hub"(dir) {
@@ -251,6 +266,15 @@ await build({
   publish: "never",
 });
 fs.copyFileSync(path.join(stage, "env", "build.json"), path.join(desktop, "dist", `build-${platform}-${arch}.json`));
+
+if (argv.includes("--install") && platform === "mac") {
+  const dir = path.join(desktop, "dist", arch === "arm64" ? "mac-arm64" : "mac");
+  const appName = fs.readdirSync(dir).find((f) => f.endsWith(".app"));
+  const target = path.join("/Applications", appName);
+  step(`Installing ${target}`);
+  fs.rmSync(target, { recursive: true, force: true });
+  run("ditto", [path.join(dir, appName), target]);
+}
 
 step("Done");
 for (const name of fs.readdirSync(path.join(desktop, "dist"))) {
