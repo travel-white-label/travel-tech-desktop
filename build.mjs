@@ -259,12 +259,23 @@ const config = {
   }),
   extraMetadata: { version, ...(test && { name: `${pkg.name}-test` }) },
 };
-fs.rmSync(path.join(desktop, "dist"), { recursive: true, force: true });
-await build({
-  targets: { mac: Platform.MAC, win: Platform.WINDOWS, linux: Platform.LINUX }[platform].createTarget(null, Arch[arch]),
-  config,
-  publish: "never",
-});
+// On Windows, antivirus briefly locks freshly written files (supplierhub.exe,
+// template.db) and electron-builder's copy fails with EBUSY: wait and retry.
+for (let attempt = 1; ; attempt++) {
+  fs.rmSync(path.join(desktop, "dist"), { recursive: true, force: true });
+  try {
+    await build({
+      targets: { mac: Platform.MAC, win: Platform.WINDOWS, linux: Platform.LINUX }[platform].createTarget(null, Arch[arch]),
+      config,
+      publish: "never",
+    });
+    break;
+  } catch (error) {
+    if (error.code !== "EBUSY" || attempt === 4) throw error;
+    console.log(`\n${error.message} — retrying in ${attempt * 15}s`);
+    await new Promise((resolve) => setTimeout(resolve, attempt * 15_000));
+  }
+}
 fs.copyFileSync(path.join(stage, "env", "build.json"), path.join(desktop, "dist", `build-${platform}-${arch}.json`));
 
 if (argv.includes("--install") && platform === "mac") {
