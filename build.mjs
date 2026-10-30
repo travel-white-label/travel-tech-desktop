@@ -175,7 +175,11 @@ const builders = {
     sh("run", "-s", "seed");
     sh("run", "-s", "seed-customer-roles");
     sh("run", "-s", "import-reference-data");
-    sh("exec", "next", "build");
+    // Its type check outgrows Node's default heap on the 7 GB macOS runners.
+    run("npx", ["-y", pnpm, "exec", "next", "build"], {
+      cwd: dir,
+      env: { ...buildEnv, NODE_OPTIONS: "--max-old-space-size=6144" },
+    });
 
     step("Staging the admin server");
     const standalone = path.join(stage, "standalone");
@@ -198,12 +202,15 @@ const builders = {
     }
 
     // VACUUM INTO folds the WAL into one compact file — the only safe way to
-    // copy a WAL-mode database.
-    const { createClient } = createRequire(path.join(dir, "package.json"))("@libsql/client");
-    const client = createClient({ url: `file:${scratch.replace(/\\/g, "/")}` });
-    return client
-      .execute(`VACUUM INTO '${templateDb.replace(/\\/g, "/").replace(/'/g, "''")}'`)
-      .then(() => client.close());
+    // copy a WAL-mode database. In a child process: libsql keeps its file handles
+    // until exit, and on Windows an open template.db cannot be copied (EBUSY).
+    run(process.execPath, [
+      "-e",
+      'const c = require("@libsql/client").createClient({ url: process.argv[1] });' +
+        "c.execute(process.argv[2]).then(() => c.close());",
+      `file:${scratch.replace(/\\/g, "/")}`,
+      `VACUUM INTO '${templateDb.replace(/\\/g, "/").replace(/'/g, "''")}'`,
+    ], { cwd: dir });
   },
 
   "supplier-hub"(dir) {
