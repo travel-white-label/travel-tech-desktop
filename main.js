@@ -131,6 +131,62 @@ function logMain(line) {
   }
 }
 
+// Updates come from the GitHub releases of this channel (app-update.yml, written by
+// electron-builder from `build.publish`): a test build follows test pre-releases,
+// production follows the latest release. Nothing downloads until the user agrees.
+// macOS only installs updates into a signed app, and the portable .exe cannot replace
+// itself, so those two open the release page instead.
+// ponytail: drop the darwin case once the Mac build is signed and notarized.
+const UPDATE_EVERY_MS = 4 * 60 * 60 * 1000;
+const RELEASES = "https://github.com/travel-white-label/travel-tech-desktop/releases";
+
+function startUpdateChecks(win) {
+  if (!app.isPackaged || DEV) return;
+  const { autoUpdater } = require("electron-updater");
+  const selfInstall = process.platform !== "darwin" && !process.env.PORTABLE_EXECUTABLE_DIR;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = { info() {}, warn: logMain, error: logMain, debug() {} };
+  let asked = null; // the version already offered, so a periodic check does not ask again
+
+  autoUpdater.on("update-available", async ({ version }) => {
+    if (asked === version) return;
+    asked = version;
+    logMain(`update ${version} available`);
+    const { response } = await dialog.showMessageBox(win, {
+      type: "info",
+      title: APP_NAME,
+      message: `Version ${version} is available.`,
+      detail: `You have ${app.getVersion()}. ` +
+        (selfInstall ? "It downloads in the background and installs when you restart." : "The download page opens in your browser."),
+      buttons: ["Download", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response !== 0) return;
+    if (selfInstall) autoUpdater.downloadUpdate().catch((error) => logMain(`update download failed: ${error.message}`));
+    else void shell.openExternal(`${RELEASES}/tag/v${version}`);
+  });
+
+  autoUpdater.on("update-downloaded", async ({ version }) => {
+    logMain(`update ${version} downloaded`);
+    const { response } = await dialog.showMessageBox(win, {
+      type: "info",
+      title: APP_NAME,
+      message: `Version ${version} is ready to install.`,
+      detail: "Restart now, or it installs the next time you quit.",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+
+  const check = () => autoUpdater.checkForUpdates().catch((error) => logMain(`update check failed: ${error.message}`));
+  void check();
+  setInterval(check, UPDATE_EVERY_MS).unref();
+}
+
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -455,6 +511,7 @@ if (!app.requestSingleInstanceLock()) {
             `Data folder: ${userData}`,
         });
       }
+      startUpdateChecks(win);
     } catch (error) {
       fail(error);
     }

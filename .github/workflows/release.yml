@@ -92,6 +92,10 @@ jobs:
           ENV_SUPPLIER_HUB: ${{ secrets.ENV_SUPPLIER_HUB }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           USE_SYSTEM_FPM: ${{ matrix.target == 'linux-arm64' && 'true' || '' }}
+      # Update feeds: both Mac jobs write <channel>-mac.yml; keep each and merge them at release.
+      - if: runner.os == 'macOS'
+        shell: bash
+        run: for f in dist/*-mac.yml; do mv "$f" "$f.${{ matrix.target }}.part"; done
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -103,6 +107,9 @@ jobs:
             dist/white-label-admin-*.AppImage
             dist/white-label-admin-*.deb
             dist/build-*.json
+            dist/*.yml
+            dist/*.part
+            dist/*.blockmap
 
   release:
     if: github.ref_type == 'tag'
@@ -121,6 +128,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd assets
+          rm -f builder-debug.yml builder-effective-config.yaml
+          # One <channel>-mac.yml listing both architectures (electron-updater picks by arch).
+          for channel in $(ls *-mac.yml.*.part | sed 's/-mac\.yml\..*//' | sort -u); do
+            yq eval-all '. as $f ireduce ({}; . *+ $f)' "$channel"-mac.yml.*.part > "$channel-mac.yml"
+            rm "$channel"-mac.yml.*.part
+          done
           sha256sum white-label-admin-* > checksums.txt
           {
             echo "Channel: **${{ needs.meta.outputs.channel }}**"
@@ -132,4 +145,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --notes-file notes.md \
             ${{ needs.meta.outputs.channel == 'test' && '--prerelease' || '' }} \
-            white-label-admin-* checksums.txt build-*.json
+            white-label-admin-* checksums.txt build-*.json *.yml

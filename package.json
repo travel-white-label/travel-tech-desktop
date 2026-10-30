@@ -68,6 +68,16 @@
       ],
       "category": "Office",
       "maintainer": "White-Label <desktop@white-label.invalid>"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "travel-white-label",
+        "repo": "travel-tech-desktop"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   }
 }
